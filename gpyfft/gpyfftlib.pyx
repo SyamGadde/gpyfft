@@ -10,6 +10,7 @@
 import cython
 import pyopencl as cl
 from libc.stdlib cimport malloc, free
+from libc.stdint cimport intptr_t
 
 ctypedef long int voidptr_t
 
@@ -658,7 +659,7 @@ cdef class Plan(object):
                 clReleaseMemObject(out_buffers_[i])
 
         #return tuple((cl.Event.from_cl_event_as_int(<long>out_cl_events[i]) for i in range(n_queues)))
-        return tuple((cl.Event.from_int_ptr(<long>out_cl_events[i], retain=False) for i in range(n_queues)))
+        return tuple((cl.Event.from_int_ptr(<intptr_t>out_cl_events[i], retain=False) for i in range(n_queues)))
             
         
             
