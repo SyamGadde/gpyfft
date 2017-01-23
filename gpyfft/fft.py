@@ -9,7 +9,7 @@ GFFT = GpyFFT(debug=False)
 # precision: single, double
 
 class FFT(object):
-    def __init__(self, context, queue, input_arrays, output_arrays=None, axes = None, fast_math = False, filledshape_in = None, filledshape_out = None):
+    def __init__(self, context, queue, input_arrays, output_arrays=None, axes = None, fast_math = False, input_shape = None, output_shape = None):
 
         """
         Normally, output_arrays == None means this is an in-place
@@ -19,20 +19,22 @@ class FFT(object):
         To specify in-place real-to-complex or complex-to-real transforms,
         merely set output_arrays to view(s) of the input_array with the
         expected target data type.
-        Also filledshape_in/out allow you to send end-padded
-        arrays (also useful for real-to-complex/complex-to-real
-        in which case one of the arrays is padded with at least one
-        extra element!)
+        In-place real-to-complex/complex-to-real transforms require
+        the real array to be padded with at least one extra element.
+        input_shape and output_shape allow you to specify the shape
+        of the "unpadded" portion of the array.  Consequently, using
+        input_shape/output_shape, you may add as much end-padding as
+        you wish.
         """
 
         self.context = context
         self.queue = queue
 
         in_array = input_arrays[0]
-        if filledshape_in is None:
-            filledshape_in = in_array.shape
+        if input_shape is None:
+            input_shape = in_array.shape
         t_strides_in, t_distance_in, t_batchsize_in, t_shape = self.calculate_transform_strides(
-            axes, filledshape_in, in_array.strides, in_array.dtype,
+            axes, input_shape, in_array.strides, in_array.dtype,
             )
 
         outdtype = None
@@ -40,10 +42,10 @@ class FFT(object):
             out_array = output_arrays[0]
             inplace = (in_array.base_data is out_array.base_data)
             t_inplace = inplace
-            if filledshape_out is None:
-                filledshape_out = out_array.shape
+            if output_shape is None:
+                output_shape = out_array.shape
             t_strides_out, t_distance_out, foo, bar = self.calculate_transform_strides(
-                axes, filledshape_out, out_array.strides, out_array.dtype)
+                axes, output_shape, out_array.strides, out_array.dtype)
             outdtype = out_array.dtype
             if in_array.dtype.kind == 'c' and outdtype.kind == 'f':
                 # complex-to-real
