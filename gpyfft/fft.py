@@ -9,15 +9,16 @@ GFFT = GpyFFT(debug=False)
 # precision: single, double
 
 class FFT(object):
-    def __init__(self, context, queue, input_arrays, output_arrays=None, axes = None, fast_math = False, filledshape_in = None, filledshape_out = None, inplace = False):
+    def __init__(self, context, queue, input_arrays, output_arrays=None, axes = None, fast_math = False, filledshape_in = None, filledshape_out = None):
 
         """
         Normally, output_arrays == None means this is an in-place
-        transform.  However, for in-place real-to-complex or
-        complex-to-real transforms, the user needs to specify both
-        (and they need to be views on the same data), in which case
-        you can add inplace=True to let us know that it is actually
-        in-place.
+        transform.  However, if the input and output point to the
+        same underlying buffer object (i.e. input.base_data is the
+        same as output.base_data) then it is also considered in-place.
+        To specify in-place real-to-complex or complex-to-real transforms,
+        merely set output_arrays to view(s) of the input_array with the
+        expected target data type.
         Also filledshape_in/out allow you to send end-padded
         arrays (also useful for real-to-complex/complex-to-real
         in which case one of the arrays is padded with at least one
@@ -36,8 +37,9 @@ class FFT(object):
 
         outdtype = None
         if output_arrays is not None:
-            t_inplace = inplace
             out_array = output_arrays[0]
+            inplace = (in_array.base_data is out_array.base_data)
+            t_inplace = inplace
             if filledshape_out is None:
                 filledshape_out = out_array.shape
             t_strides_out, t_distance_out, foo, bar = self.calculate_transform_strides(
