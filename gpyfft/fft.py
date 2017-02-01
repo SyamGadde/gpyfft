@@ -50,7 +50,7 @@ class FFT(object):
         if real:
             real_axis = axes_transform[0]
 
-        if out_array is not None:
+        if not t_inplace:
             t_strides_out, t_distance_out, t_batchsize_out, t_shape_out, foo = self.calculate_transform_strides(
                 axes, out_array)
 
@@ -58,11 +58,17 @@ class FFT(object):
 
         else:
             if real:
-                t_strides_out = t_strides_in
+                t_distance_out = t_distance_in
                 if in_kind == 'f':
-                    t_distance_out = t_distance_in // 2 # real-to-complex
+                    # real-to-complex
+                    if t_distance_out > 1:
+                        t_distance_out = t_distance_in // 2
+                    t_strides_out = tuple( (x // 2, 1)[x == 1] for x in t_strides_in )
                 else:
-                    t_distance_out = t_distance_in * 2 # complex-to-real
+                    # complex-to-real
+                    if t_distance_out > 1:
+                        t_distance_out = t_distance_in * 2
+                    t_strides_out = tuple( (x * 2, 1)[x == 1] for x in t_strides_in )
             else:
                 t_strides_out, t_distance_out = t_strides_in, t_distance_in
             
@@ -74,17 +80,35 @@ class FFT(object):
                 expected_out_shape[real_axis] = (expected_out_shape[real_axis] // 2) + 1
                 if t_inplace:
                     # In-place -- make sure there is enough padding in
-                    # first transformed axis
-                    # (need space for 2 * ((N // 2) + 1)) elements)
-                    # We check padding by looking at the strides, since
-                    # user will have sent a "sliced" version of a padded
-                    # array.
-                    assert real_axis + 1 < in_array.ndim, "in-place real-to-complex transforms require an extra dimension after the 'real' transformed axis (to determine if you've sent proper padding), even if that dimension is of size 1"
-                    curstride = in_array.strides[real_axis + 1]
-                    curstride_elems = curstride / in_itemsize
-                    expectedstride_elems = (2 * expected_out_shape[real_axis])
-                    expectedstride = expectedstride_elems * in_itemsize
-                    assert expectedstride <= curstride, "Not enough padding in array for real-to-complex in axis %d (found next-dim stride of %d bytes (%d elements), expected %d bytes (%d elements)" % (real_axis, curstride, curstride_elems, expectedstride, expectedstride_elems)
+                    # fastest dimension.
+                    # We need space for 2 * ((N // 2) + 1)) elements if
+                    # real axis is the fastest dimension, otherwise fastest
+                    # dimension needs to have twice the space -- these
+                    # requirements determined through trial and error.
+                    sorted_strides_inds, sorted_strides = zip(*sorted([(i,e) for i,e in enumerate(in_array.strides)], key=lambda x: x[1]))
+                    real_stride = in_array.strides[real_axis]
+                    fastest_dim = sorted_strides_inds[0]
+                    second_fastest_dim = None
+                    if len(sorted_strides_inds) > 1:
+                        second_fastest_dim = sorted_strides_inds[1]
+                    if real_stride == in_itemsize:
+                        # real axis is fastest dimension
+                        assert sorted_strides_inds[0] == real_axis
+                        minelems = (2 * expected_out_shape[real_axis])
+                    else:
+                        minelems = 2 * in_array.shape[fastest_dim]
+                    minstride = minelems * in_itemsize
+                    if second_fastest_dim is not None:
+                        # We check padding by looking at the stride of the
+                        # second fastest dimension
+                        nextstride = sorted_strides[1]
+                        nextelems = nextstride / in_itemsize
+                        assert nextstride >= minstride, "Not enough padding in array for real-to-complex in axis %d (found next-dim stride of %d bytes (%d elements), expected %d bytes (%d elements)" % (real_axis, nextstride, nextelems, minstride, minelems)
+                    else:
+                        # 'real' axis is the only dimension, so just
+                        # check the buffer size
+                        minbufsize = in_array.size * in_itemsize
+                        assert in_array.base_data.size >= minbufsize, "Underlying buffer does not have enough padding for in-place real-to-complex transform"
                 else:
                     assert out_array.shape == tuple(expected_out_shape), \
                         'output array shape %s does not match expected shape: %s'%(out_array.shape,expected_out_shape)
