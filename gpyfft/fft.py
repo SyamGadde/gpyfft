@@ -6,6 +6,7 @@ GFFT = GpyFFT(debug=False)
 
 import pyopencl as cl
 import numpy as np
+import sys
 
 # TODO:
 
@@ -158,7 +159,6 @@ class FFT(object):
                     t_shape = tuple((fft_shape[x] for x in axes_transform))
                 else:
                     t_shape = t_shape_out
-
 
         self.t_shape = t_shape
         self.batchsize = t_batchsize_in
