@@ -7,8 +7,6 @@ GFFT = GpyFFT(debug=False)
 import pyopencl as cl
 import numpy as np
 
-import sys
-
 # TODO:
 
 class FFT(object):
@@ -161,6 +159,7 @@ class FFT(object):
                 else:
                     t_shape = t_shape_out
 
+
         self.t_shape = t_shape
         self.batchsize = t_batchsize_in
 
@@ -187,15 +186,10 @@ class FFT(object):
             print('axes', axes        )
             print('in_array.shape:          ', in_array.shape)
             print('in_array.strides/itemsize', tuple(s // in_array.dtype.itemsize for s in in_array.strides))
-            print('fft_shape:               ', fft_shape)
-            if out_array is not None:
-                print('out_array.shape:          ', out_array.shape)
-                print('out_array.strides/itemsize', tuple(s // out_array.dtype.itemsize for s in out_array.strides))
             print('shape transform          ', t_shape)
             print('layout_in                ', str(layout_in).split('.')[1])
             print('t_strides                ', t_strides_in)
             print('distance_in              ', t_distance_in)
-            print('distance_out             ', t_distance_out)
             print('batchsize                ', t_batchsize_in)
             print('layout_out               ', str(layout_out).split('.')[1])
             print('t_stride_out             ', t_strides_out)
