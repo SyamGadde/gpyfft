@@ -8,6 +8,12 @@ import fractions
 import itertools
 import numpy
 import operator
+import os
+
+try:
+    dummy = profile
+except NameError:
+    profile = lambda x: x
 
 CACHED_PLANS = {}
 
@@ -18,9 +24,15 @@ CACHED_PLANS = {}
 my_gpyfft = None
 my_pyopencl = None
 clfftRadices = None
+
+def import_my_pyopencl():
+    global my_pyopencl
+    if my_pyopencl is None:
+        import pyopencl
+        my_pyopencl = pyopencl
+
 def import_my_gpyfft():
     global my_gpyfft
-    global my_pyopencl
     global clfftRadices
     if my_gpyfft is None:
         import gpyfft
@@ -33,9 +45,6 @@ def import_my_gpyfft():
             clfftRadices = set([2, 3, 5, 7])
         else:
             clfftRadices = set([2, 3, 5])
-    if my_pyopencl is None:
-        import pyopencl
-        my_pyopencl = pyopencl
 
 def good_gpyfft_size(trylen):
     global clfftRadices
@@ -75,6 +84,7 @@ class BatchPlan(object):
         )
     )
     
+    @profile
     def __init__(self, queue, in_array, axes, maxmem=None, keeparrays=True, out_array=None):
         """
         Usage:
@@ -153,6 +163,7 @@ class BatchPlan(object):
 
         # get an idea of how much memory is available on device and its
         # alignment requirement (in case we need to use sub-buffers)
+        import_my_pyopencl()
         device = queue.get_info(my_pyopencl.command_queue_info.DEVICE)
         bytesavailable = device.get_info(my_pyopencl.device_info.GLOBAL_MEM_SIZE)
         if maxmem is None:
@@ -345,8 +356,8 @@ class BatchPlan(object):
         #print "_calc_collapse: shape=%s strides=%s leavedims=%s" % (shape, strides, leavedims)
         if set(leavedims) == set(range(len(shape))):
             return ([[x] for x in range(len(shape))], shape, strides, leavedims)
-        oldndim = len(oldshape)
         oldshape = shape
+        oldndim = len(oldshape)
         oldstrides = strides
 
         # this will store the dims sorted by stride
@@ -417,15 +428,15 @@ class BatchPlan(object):
         return x
 
     @profile
-    def get_batches(self, *arrays):
-        return self._get_batches_aux(*arrays)
+    def get_batches(self, arrays):
+        return self._get_batches_aux(arrays)
 
     @profile
-    def get_unique_batches(self, *arrays):
-        return self._get_batches_aux(*arrays, unique_only=True)
+    def get_unique_batches(self, arrays):
+        return self._get_batches_aux(arrays, unique_only=True)
 
     @profile
-    def _get_batches_aux(self, *arrays, unique_only=False):
+    def _get_batches_aux(self, arrays, unique_only=False):
         startenum = 0
         for (ruleind, rules) in enumerate(self.rules_list):
             nextenum = startenum + 1
@@ -465,7 +476,7 @@ class BatchPlan(object):
             for dimind in range(ndim):
                 if dimind in axes:
                     continue
-                numsteps *= int(ceil(1. * shape0[dimind] / stepsizes[dimind]))
+                numsteps *= int(numpy.ceil(1. * shape0[dimind] / stepsizes[dimind]))
             # there will be at most two unique batch shape/stride combinations
             # in the batch dimension -- the last chunk in the batch dimension
             # may be smaller.
@@ -564,12 +575,13 @@ class BatchPlan(object):
             if self.in_array is None:
                 raise Exception("No default array available!")
             arrays = [ self.in_array ]
-        for batchentry in self.get_batches(*arrays):
+        for batchentry in self.get_batches(arrays):
             (curbatchenum, currules, curbatch) = batchentry
             args = callfunc(curbatchenum, currules, curbatch, args)
         return args
 
 class FFTBatchPlan(BatchPlan):
+    @profile
     def __init__(self, context, queue, in_array, axes, **kwargs):
         BatchPlan.__init__(self, queue, in_array, axes, **kwargs)
         self.context = context
@@ -586,14 +598,14 @@ class FFTBatchPlan(BatchPlan):
 
     @profile
     def get_fft_objs(self, arrays):
-        batchgen = self.get_unique_batches(*arrays)
+        batchgen = self.get_unique_batches(arrays)
         return [
-            self._get_plan(self.context, self.queue, *batcharrays, axes=batchrules.axes)
+            self._get_plan(self.context, self.queue, batcharrays, axes=batchrules.axes)
             for (batchenum, batchrules, batcharrays) in batchgen
         ]
 
     @profile
-    def fft_loop(self, *no_args_allowed, callfunc=None, args=None, arrays=None, forward=None, wait_for=None):
+    def fft_loop(self, *no_args_allowed, **kwargs):
         """
         Same as BatchPlan.batch_loop, but all arguments must be keyword
         arguments, to allow callfunc and args to be optional to override
@@ -602,6 +614,11 @@ class FFTBatchPlan(BatchPlan):
         """
         if len(no_args_allowed) > 0:
             raise Exception("All arguments to FFTBatchPlan.batch_loop must be keyword arguments!")
+        callfunc = kwargs.pop('callfunc', None)
+        args = kwargs.pop('args', None)
+        arrays = kwargs.pop('arrays', None)
+        forward = kwargs.pop('forward', None)
+        wait_for = kwargs.pop('wait_for', None)
         if forward is None:
             forward = True
         if args is None:
@@ -633,7 +650,7 @@ class FFTBatchPlan(BatchPlan):
         return super(FFTBatchPlan, self).batch_loop(callfunc, args, arrays)
 
     @profile
-    def _get_plan(self, context, queue, *arrays, axes=None, nocache=False, nooutput=True):
+    def _get_plan(self, context, queue, arrays, axes=None, nocache=False, nooutput=True):
         global my_gpyfft
         assert len(arrays) == 1 or len(arrays) == 2
         output = None
