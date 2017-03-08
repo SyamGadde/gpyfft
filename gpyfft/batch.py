@@ -61,6 +61,128 @@ def good_gpyfft_size(trylen):
         return True
     return False
 
+@profile
+def calc_collapse(shape, strides, leavedims=[]):
+    # post-condition: dimensions in returned collapse rule will be
+    # ordered by increasing stride.
+    #print "calc_collapse: shape=%s strides=%s leavedims=%s" % (shape, strides, leavedims)
+    oldshape = list(shape)
+    oldndim = len(oldshape)
+    oldstrides = list(strides)
+
+    # this will store the dims sorted by stride
+    olddimsbystride = zip(*sorted(zip([x for x in range(oldndim)], oldstrides), key=operator.itemgetter(1)))[0]
+    #print "calc_collapse: olddimsbystride=%s" % (olddimsbystride,)
+
+    if len(leavedims) == oldndim:
+        old2new = dict((x[1], x[0]) for x in enumerate(olddimsbystride))
+        return ([[olddimsbystride[x]] for x in range(oldndim)],
+                [oldshape[olddimsbystride[x]] for x in range(oldndim)],
+                [oldstrides[olddimsbystride[x]] for x in range(oldndim)],
+                [old2new[x] for x in leavedims])
+
+    newndim = oldndim
+    curnewdim = 0
+    curoldind = 0
+    curolddim = olddimsbystride[curoldind]
+    cursize = oldshape[curolddim]
+    newshape = [oldshape[curolddim]]
+    newstrides = [oldstrides[curolddim]]
+    old2new = {}
+    if curolddim in leavedims:
+        old2new[curolddim] = curnewdim
+    rule_collapse = [[curolddim]]
+    while curoldind < oldndim - 1:
+        curolddim = olddimsbystride[curoldind]
+        # we will attempt to collapse current dimension with next
+        # precondition: curolddim is a member of rule_collapse[-1]
+        nextolddim = olddimsbystride[curoldind + 1]
+        nextnewdim = curnewdim + 1
+        nextsize = oldshape[nextolddim]
+        #print "calc_collapse: enter loop curoldind=%s curolddim=%s curnewdim=%s nextolddim=%s nextnewdim=%s cursize=%s nextsize=%s rule_collapse=%s" % (curoldind, curolddim, curnewdim, nextolddim, nextnewdim, cursize, nextsize, rule_collapse)
+        curleave = curolddim in leavedims
+        nextleave = nextolddim in leavedims
+        cursingle = cursize == 1
+        nextsingle = nextsize == 1
+        if (not (curleave and nextleave) # leave if both want to be alone
+            and
+            (not curleave or nextsingle) # leave cur alone unless next dim is singleton
+            and
+            (not nextleave or cursingle) # leave next alone unless cur dim is singleton
+            and 
+            (
+                # make sure strides are compatible unless one is singleton
+                cursingle or nextsingle or
+                newshape[curnewdim] * newstrides[curnewdim] == oldstrides[nextolddim]
+            )):
+            # we can collapse with next dimension and traverse both with
+            # the same stride
+            if cursize == 1:
+                # use other dimension's strides because a singleton
+                # dimension's stride (in theory) has no meaning
+                newstrides[-1] == oldstrides[nextolddim]
+            rule_collapse[-1].append(nextolddim)
+            newsize = cursize * nextsize
+            newshape[curnewdim] = newsize
+            #print " collapsed dim: rule_collapse=%s newshape=%s" % (rule_collapse, newshape)
+            #print "Collapsing dim %d (size=%d) with next dim %d (size=%d) to make new dimension %d (size=%d)" % (curnewdim, cursize, nextnewdim, nextsize, curnewdim, newsize)
+            curolddim = nextolddim
+            curoldind += 1
+            cursize = newsize
+            newndim -= 1
+            # don't increment curnewdim, just continue
+            continue
+        if nextolddim < oldndim:
+            rule_collapse.append([nextolddim])
+            newshape.append(oldshape[nextolddim])
+            newstrides.append(oldstrides[nextolddim])
+            if nextolddim in leavedims:
+                old2new[nextolddim] = nextnewdim
+        #print " no collapse: rule_collapse=%s" % (rule_collapse,)
+        curoldind += 1
+        cursize = nextsize
+        curnewdim = nextnewdim
+    newleavedims = [old2new[x] for x in leavedims]
+    #print "returning rule_collapse=%s newshape=%s newstrides=%s leavedims=%s" % (rule_collapse, newshape, newstrides, newleavedims)
+    return (rule_collapse, newshape, newstrides, newleavedims)
+
+@profile
+def collapse_array(x, rule_collapse):
+    """
+    Return a view of the array that is collapsed along the non-transformed
+    dimensions.
+    pre-condition: dimensions in rule_collapse must be sorted by
+    increasing strides.
+    """
+    #print "collapse_array: rule_collapse=%s x.shape=%s x.strides=%s" % (rule_collapse, x.shape, x.strides)
+    oldshape = x.shape
+    x = x.transpose(list(itertools.chain(*rule_collapse)))
+    #print "                transposed.shape=%s strides=%s" % (x.shape, x.strides)
+    newshape = [1] * len(rule_collapse)
+    for (newdim, dimgroup) in enumerate(rule_collapse):
+        for olddim in dimgroup:
+            newshape[newdim] *= oldshape[olddim]
+    x = x.reshape(newshape, order='F')
+    #print "                retval.shape=%s strides=%s" % (x.shape, x.strides)
+    return x
+
+@profile
+def uncollapse_array(x, rule_collapse, oldshape):
+    """
+    Return an "uncollapsed" view of the array that is already a collapsed
+    view of an existing array using the given collapse rule rule_collapse
+    and original shape oldshape.
+    pre-condition: dimensions in rule_collapse must be sorted by
+    increasing strides.
+    """
+    #print "uncollapse_array: rule_collapse=%s oldshape=%s x.shape=%s x.strides=%s" % (rule_collapse, oldshape, x.shape, x.strides)
+    flatrule = list(itertools.chain(*rule_collapse))
+    intermshape = [oldshape[d] for d in flatrule]
+    x = x.reshape(intermshape, order='F')
+    trans = numpy.argsort(flatrule)
+    x = x.transpose(trans).reshape(oldshape, order='F')
+    return x
+
 class BatchPlan(object):
     Rules = collections.namedtuple(
         "Rules",
@@ -176,7 +298,7 @@ class BatchPlan(object):
             axes = []
     
             while len(tryaxes) > 0:
-                (collapse, newshape, newstrides, newaxes) = self._calc_collapse(in_array.shape, in_array.strides, leavedims=tryaxes)
+                (collapse, newshape, newstrides, newaxes) = calc_collapse(in_array.shape, in_array.strides, leavedims=tryaxes)
     
                 newndim = len(newshape)
     
@@ -212,7 +334,7 @@ class BatchPlan(object):
                 # with stepmins[dim] == 1 can be looped (otherwise we will skip
                 # processing of some data).  Look for candidates.
                 nonaxes = [ x for x in range(newndim) if x not in newaxes ]
-                # nonaxes is sorted by stride (from _calc_collapse()), so we
+                # nonaxes is sorted by stride (from calc_collapse()), so we
                 # can easily prefer batching for smallest strides and looping
                 # for largest strides
                 nonloop_dims = []
@@ -349,128 +471,6 @@ class BatchPlan(object):
         out_array.shape = tuple(newshape)
         return out_array
     
-    @staticmethod
-    def _calc_collapse(shape, strides, leavedims=[]):
-        # post-condition: dimensions in returned collapse rule will be
-        # ordered by increasing stride.
-        #print "_calc_collapse: shape=%s strides=%s leavedims=%s" % (shape, strides, leavedims)
-        oldshape = list(shape)
-        oldndim = len(oldshape)
-        oldstrides = list(strides)
-
-        # this will store the dims sorted by stride
-        olddimsbystride = zip(*sorted(zip([x for x in range(oldndim)], oldstrides), key=operator.itemgetter(1)))[0]
-        #print "_calc_collapse: olddimsbystride=%s" % (olddimsbystride,)
-
-        if len(leavedims) == oldndim:
-            old2new = dict((x[1], x[0]) for x in enumerate(olddimsbystride))
-            return ([[olddimsbystride[x]] for x in range(oldndim)],
-                    [oldshape[olddimsbystride[x]] for x in range(oldndim)],
-                    [oldstrides[olddimsbystride[x]] for x in range(oldndim)],
-                    [old2new[x] for x in leavedims])
-
-        newndim = oldndim
-        curnewdim = 0
-        curoldind = 0
-        curolddim = olddimsbystride[curoldind]
-        cursize = oldshape[curolddim]
-        newshape = [oldshape[curolddim]]
-        newstrides = [oldstrides[curolddim]]
-        old2new = {}
-        if curolddim in leavedims:
-            old2new[curolddim] = curnewdim
-        rule_collapse = [[curolddim]]
-        while curoldind < oldndim - 1:
-            curolddim = olddimsbystride[curoldind]
-            # we will attempt to collapse current dimension with next
-            # precondition: curolddim is a member of rule_collapse[-1]
-            nextolddim = olddimsbystride[curoldind + 1]
-            nextnewdim = curnewdim + 1
-            nextsize = oldshape[nextolddim]
-            #print "_calc_collapse: enter loop curoldind=%s curolddim=%s curnewdim=%s nextolddim=%s nextnewdim=%s cursize=%s nextsize=%s rule_collapse=%s" % (curoldind, curolddim, curnewdim, nextolddim, nextnewdim, cursize, nextsize, rule_collapse)
-            curleave = curolddim in leavedims
-            nextleave = nextolddim in leavedims
-            cursingle = cursize == 1
-            nextsingle = nextsize == 1
-            if (not (curleave and nextleave) # leave if both want to be alone
-                and
-                (not curleave or nextsingle) # leave cur alone unless next dim is singleton
-                and
-                (not nextleave or cursingle) # leave next alone unless cur dim is singleton
-                and 
-                (
-                    # make sure strides are compatible unless one is singleton
-                    cursingle or nextsingle or
-                    newshape[curnewdim] * newstrides[curnewdim] == oldstrides[nextolddim]
-                )):
-                # we can collapse with next dimension and traverse both with
-                # the same stride
-                if cursize == 1:
-                    # use other dimension's strides because a singleton
-                    # dimension's stride (in theory) has no meaning
-                    newstrides[-1] == oldstrides[nextolddim]
-                rule_collapse[-1].append(nextolddim)
-                newsize = cursize * nextsize
-                newshape[curnewdim] = newsize
-                #print " collapsed dim: rule_collapse=%s newshape=%s" % (rule_collapse, newshape)
-                #print "Collapsing dim %d (size=%d) with next dim %d (size=%d) to make new dimension %d (size=%d)" % (curnewdim, cursize, nextnewdim, nextsize, curnewdim, newsize)
-                curolddim = nextolddim
-                curoldind += 1
-                cursize = newsize
-                newndim -= 1
-                # don't increment curnewdim, just continue
-                continue
-            if nextolddim < oldndim:
-                rule_collapse.append([nextolddim])
-                newshape.append(oldshape[nextolddim])
-                newstrides.append(oldstrides[nextolddim])
-                if nextolddim in leavedims:
-                    old2new[nextolddim] = nextnewdim
-            #print " no collapse: rule_collapse=%s" % (rule_collapse,)
-            curoldind += 1
-            cursize = nextsize
-            curnewdim = nextnewdim
-        newleavedims = [old2new[x] for x in leavedims]
-        #print "returning rule_collapse=%s newshape=%s newstrides=%s leavedims=%s" % (rule_collapse, newshape, newstrides, newleavedims)
-        return (rule_collapse, newshape, newstrides, newleavedims)
-
-    @staticmethod
-    def collapse_array(x, rule_collapse):
-        """
-        Return a view of the array that is collapsed along the non-transformed
-        dimensions.
-        pre-condition: dimensions in rule_collapse must be sorted by
-        increasing strides.
-        """
-        #print "collapse_array: rule_collapse=%s x.shape=%s x.strides=%s" % (rule_collapse, x.shape, x.strides)
-        oldshape = x.shape
-        x = x.transpose(list(itertools.chain(*rule_collapse)))
-        #print "                transposed.shape=%s strides=%s" % (x.shape, x.strides)
-        newshape = [1] * len(rule_collapse)
-        for (newdim, dimgroup) in enumerate(rule_collapse):
-            for olddim in dimgroup:
-                newshape[newdim] *= oldshape[olddim]
-        x = x.reshape(newshape, order='F')
-        #print "                retval.shape=%s strides=%s" % (x.shape, x.strides)
-        return x
-
-    @staticmethod
-    def uncollapse_array(x, rule_collapse, oldshape):
-        """
-        Return an "uncollapsed" view of the array that is already a collapsed
-        view of an existing array using the given collapse rule rule_collapse
-        and original shape oldshape.
-        pre-condition: dimensions in rule_collapse must be sorted by
-        increasing strides.
-        """
-        #print "uncollapse_array: rule_collapse=%s oldshape=%s x.shape=%s x.strides=%s" % (rule_collapse, oldshape, x.shape, x.strides)
-        flatrule = list(itertools.chain(*rule_collapse))
-        intermshape = [oldshape[d] for d in flatrule]
-        x = x.reshape(intermshape, order='F')
-        trans = numpy.argsort(flatrule)
-        x = x.transpose(trans).reshape(oldshape, order='F')
-        return x
-
     @profile
     def get_batches(self, arrays):
         return self._get_batches_aux(arrays)
@@ -496,7 +496,7 @@ class BatchPlan(object):
             #print "get_batches_aux: ruleind=%d loopindices=%s shapes=%s axes=%s firstlooper=%s batchdim=%s batchchunk=%s" % (ruleind, loopindices, [x.shape for x in arrays], axes, firstlooper, batchdim, batchchunk)
 
             assert batchchunk is None or batchchunk > 0
-            newarrays = [self.collapse_array(x, rules.collapse) for x in arrays]
+            newarrays = [collapse_array(x, rules.collapse) for x in arrays]
             # make sure all arrays match in non-transformed dimensions
             ndim = newarrays[0].ndim
             shape0 = newarrays[0].shape
