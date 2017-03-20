@@ -84,23 +84,26 @@ def calc_collapse(shape, strides, leavedims=[]):
     newndim = oldndim
     curnewdim = 0
     curoldind = 0
+    curoldind2 = 0 # if a dim in leavedims is merged with a following singleton, this stores the non-singleton ind
     curolddim = olddimsbystride[curoldind]
+    curolddim2 = olddimsbystride[curoldind2]
     cursize = oldshape[curolddim]
     newshape = [oldshape[curolddim]]
     newstrides = [oldstrides[curolddim]]
     old2new = {}
-    if curolddim in leavedims:
-        old2new[curolddim] = curnewdim
+    if curolddim2 in leavedims:
+        old2new[curolddim2] = curnewdim
     rule_collapse = [[curolddim]]
     while curoldind < oldndim - 1:
         curolddim = olddimsbystride[curoldind]
+        curolddim2 = olddimsbystride[curoldind2]
         # we will attempt to collapse current dimension with next
         # precondition: curolddim is a member of rule_collapse[-1]
         nextolddim = olddimsbystride[curoldind + 1]
         nextnewdim = curnewdim + 1
         nextsize = oldshape[nextolddim]
         #print "calc_collapse: enter loop curoldind=%s curolddim=%s curnewdim=%s nextolddim=%s nextnewdim=%s cursize=%s nextsize=%s rule_collapse=%s" % (curoldind, curolddim, curnewdim, nextolddim, nextnewdim, cursize, nextsize, rule_collapse)
-        curleave = curolddim in leavedims
+        curleave = curolddim2 in leavedims
         nextleave = nextolddim in leavedims
         cursingle = cursize == 1
         nextsingle = nextsize == 1
@@ -126,8 +129,9 @@ def calc_collapse(shape, strides, leavedims=[]):
             newshape[curnewdim] = newsize
             #print " collapsed dim: rule_collapse=%s newshape=%s" % (rule_collapse, newshape)
             #print "Collapsing dim %d (size=%d) with next dim %d (size=%d) to make new dimension %d (size=%d)" % (curnewdim, cursize, nextnewdim, nextsize, curnewdim, newsize)
-            curolddim = nextolddim
             curoldind += 1
+            if not nextsingle:
+                curoldind2 = curoldind
             cursize = newsize
             newndim -= 1
             # don't increment curnewdim, just continue
@@ -140,6 +144,7 @@ def calc_collapse(shape, strides, leavedims=[]):
                 old2new[nextolddim] = nextnewdim
         #print " no collapse: rule_collapse=%s" % (rule_collapse,)
         curoldind += 1
+        curoldind2 = curoldind
         cursize = nextsize
         curnewdim = nextnewdim
     newleavedims = [old2new[x] for x in leavedims]
